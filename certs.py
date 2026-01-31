@@ -226,6 +226,10 @@ def generate_certs(config: RunConfig) -> Path:
             "set -euo pipefail",
             f"SUDO_PASS={shlex.quote(config.sudo_pass)}",
             f"CERT_PASS={shlex.quote(config.cert_pass)}",
+            f"CERT_WORKDIR={shlex.quote(config.cert_workdir)}",
+            f"CA_CERT={shlex.quote(config.ca_cert)}",
+            f"CA_KEY={shlex.quote(config.ca_key)}",
+            f"CA_P12={shlex.quote(f'{config.cert_workdir}/elastic-stack-ca.p12')}",
             'run_sudo() { echo "$SUDO_PASS" | sudo -S -p "" "$@"; }',
             f"run_sudo rm -f {remote_zip}",
             "run_sudo "
@@ -239,6 +243,18 @@ def generate_certs(config: RunConfig) -> Path:
             + " --ca-key "
             + config.ca_key
             + " --pass \"$CERT_PASS\"",
+            f"run_sudo rm -f \"$CA_P12\"",
+            "run_sudo openssl pkcs12 -export -in \"$CA_CERT\" -inkey \"$CA_KEY\" -out \"$CA_P12\" -passout \"pass:$CERT_PASS\"",
+            f"run_sudo chown {shlex.quote(config.ssh_user)}:{shlex.quote(config.ssh_user)} \"$CA_P12\"",
+            "run_sudo test -s \"$CA_P12\"",
+            "env ZIP_PATH=\"" + remote_zip + "\" CA_P12=\"$CA_P12\" python3 - <<'PY'",
+            "import os",
+            "import zipfile",
+            "zip_path = os.environ['ZIP_PATH']",
+            "p12_path = os.environ['CA_P12']",
+            "with zipfile.ZipFile(zip_path, 'a') as zf:",
+            "    zf.write(p12_path, arcname='elastic-stack-ca.p12')",
+            "PY",
             f"run_sudo chown {shlex.quote(config.ssh_user)}:{shlex.quote(config.ssh_user)} {remote_zip}",
         ]
     )

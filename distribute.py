@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shlex
+import shutil
 import tempfile
 import zipfile
 from pathlib import Path
@@ -59,12 +60,20 @@ def distribute_certs(*, config: RunConfig, archive_path: Path) -> None:
         with zipfile.ZipFile(archive_path, "r") as zip_ref:
             zip_ref.extractall(tmp_path)
 
+        ca_bundle_candidates = list(tmp_path.rglob("elastic-stack-ca.p12"))
+
         for target in targets:
             node = target.node
             dest = target.dest
             instance_dir = tmp_path / node.short
             if not instance_dir.exists():
                 raise RuntimeError(f"Missing certs for {node.short} in archive")
+
+            if node.short in es_nodes and ca_bundle_candidates:
+                ca_bundle_source = ca_bundle_candidates[0]
+                ca_bundle_dest = instance_dir / "elastic-stack-ca.p12"
+                if ca_bundle_source != ca_bundle_dest:
+                    shutil.copy2(ca_bundle_source, ca_bundle_dest)
 
             stage_parent = f"{config.cert_workdir}/stage"
             stage_dir = f"{stage_parent}/{node.short}"
@@ -130,10 +139,15 @@ def distribute_certs(*, config: RunConfig, archive_path: Path) -> None:
             if node.short in es_nodes:
                 p12_source = f"{stage_dir}/{node.short}.p12"
                 http_p12_dest = f"{dest}/http.p12"
+                ca_p12_dest = f"{dest}/elastic-stack-ca.p12"
                 install_lines.extend(
                     [
                         f"if run_sudo test -f {shlex.quote(p12_source)}; then",
                         f"  run_sudo cp -af {shlex.quote(p12_source)} {shlex.quote(http_p12_dest)}",
+                        "fi",
+                        f"CA_P12_SRC=$(find {stage_dir_quoted} -type f -name elastic-stack-ca.p12 -print -quit || true)",
+                        "if [ -n \"$CA_P12_SRC\" ]; then",
+                        f"  run_sudo cp -af \"$CA_P12_SRC\" {shlex.quote(ca_p12_dest)}",
                         "fi",
                     ]
                 )
