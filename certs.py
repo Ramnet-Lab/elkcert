@@ -225,22 +225,25 @@ def generate_certs(config: RunConfig) -> Path:
         [
             "set -euo pipefail",
             f"SUDO_PASS={shlex.quote(config.sudo_pass)}",
+            f"CERT_PASS={shlex.quote(config.cert_pass)}",
             'run_sudo() { echo "$SUDO_PASS" | sudo -S -p "" "$@"; }',
             f"run_sudo rm -f {remote_zip}",
             "run_sudo "
             + shlex.quote(config.certutil_bin)
-            + " cert --silent --pem --in "
+            + " cert --silent --in "
             + remote_instances
             + " --out "
             + remote_zip
             + " --ca-cert "
             + config.ca_cert
             + " --ca-key "
-            + config.ca_key,
+            + config.ca_key
+            + " --pass \"$CERT_PASS\"",
             f"run_sudo chown {shlex.quote(config.ssh_user)}:{shlex.quote(config.ssh_user)} {remote_zip}",
         ]
     )
 
+    info("Generating PKCS#12 HTTP layer TLS certs (xpack.security.http.ssl)")
     info("Running elasticsearch-certutil on es1")
     result = run_script(
         es1_host,

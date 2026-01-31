@@ -29,6 +29,7 @@ class RemoteResult:
 @dataclass
 class RunConfig:
     sudo_pass: str
+    cert_pass: str
     ssh_user: str
     ssh_port: int
     connect_via: str
