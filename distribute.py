@@ -139,11 +139,13 @@ def distribute_certs(*, config: RunConfig, archive_path: Path) -> None:
             if node.short in es_nodes:
                 p12_source = f"{stage_dir}/{node.short}.p12"
                 http_p12_dest = f"{dest}/http.p12"
+                elastic_certs_dest = f"{dest}/elastic-certificates.p12"
                 ca_p12_dest = f"{dest}/elastic-stack-ca.p12"
                 install_lines.extend(
                     [
                         f"if run_sudo test -f {shlex.quote(p12_source)}; then",
                         f"  run_sudo cp -af {shlex.quote(p12_source)} {shlex.quote(http_p12_dest)}",
+                        f"  run_sudo cp -af {shlex.quote(p12_source)} {shlex.quote(elastic_certs_dest)}",
                         "fi",
                         f"CA_P12_SRC=$(find {stage_dir_quoted} -type f -name elastic-stack-ca.p12 -print -quit || true)",
                         "if [ -n \"$CA_P12_SRC\" ]; then",
