@@ -7,7 +7,7 @@ from typing import List
 from models import Node, RunConfig
 
 DEFAULT_SUDO_PASS = os.environ.get("SUDO_PASS")
-DEFAULT_CERT_PASS = os.environ.get("ELK_CERT_PASS", "")
+DEFAULT_CERT_PASS = os.environ.get("ELK_CERT_PASS")
 DEFAULT_SSH_USER = os.environ.get("SSH_USER", "cft")
 DEFAULT_SSH_PORT = int(os.environ.get("SSH_PORT", "22"))
 DEFAULT_SET_HOSTNAMES = os.environ.get("SET_HOSTNAMES", "true").lower() == "true"
@@ -64,9 +64,10 @@ def build_default_nodes(domain: str) -> List[Node]:
 
 def load_config() -> RunConfig:
     nodes = build_default_nodes(DEFAULT_DOMAIN)
+    resolved_cert_pass = DEFAULT_CERT_PASS or DEFAULT_SUDO_PASS or ""
     return RunConfig(
         sudo_pass=DEFAULT_SUDO_PASS or "",
-        cert_pass=DEFAULT_CERT_PASS,
+        cert_pass=resolved_cert_pass,
         ssh_user=DEFAULT_SSH_USER,
         ssh_port=DEFAULT_SSH_PORT,
         connect_via=DEFAULT_CONNECT_VIA,
