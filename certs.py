@@ -163,12 +163,13 @@ def extract_es_http_ca_from_p12(config: RunConfig) -> str:
         [
             "set -euo pipefail",
             f"SUDO_PASS={shlex.quote(config.sudo_pass)}",
-            f"CERT_PASS={shlex.quote(config.cert_pass)}",
             'run_sudo() { echo "$SUDO_PASS" | sudo -S -p "" "$@"; }',
             f"CA_P12={shlex.quote(f'{config.cert_workdir}/elastic-stack-ca.p12')}",
             f"CA_OUT={shlex.quote(config.es_http_ca_cert)}",
             "run_sudo mkdir -p \"$(dirname \"$CA_OUT\")\"",
-            "run_sudo openssl pkcs12 -in \"$CA_P12\" -cacerts -nokeys -passin env:CERT_PASS -out \"$CA_OUT\"",
+            "run_sudo openssl pkcs12 -in \"$CA_P12\" -cacerts -nokeys -passin "
+            + shlex.quote(f"pass:{config.cert_pass}")
+            + " -out \"$CA_OUT\"",
             f"run_sudo chown {shlex.quote(config.ssh_user)}:{shlex.quote(config.ssh_user)} \"$CA_OUT\"",
             "run_sudo chmod 644 \"$CA_OUT\"",
             "run_sudo test -s \"$CA_OUT\"",
