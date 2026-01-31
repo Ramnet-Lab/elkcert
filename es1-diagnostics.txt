@@ -1,0 +1,15 @@
+LIST CERT FILES
+sudo ls -la /etc/elasticsearch/certs
+sudo find /etc/elasticsearch -maxdepth 2 -type f \( -name "*.p12" -o -name "*.crt" -o -name "*.pem" \ ) -print
+
+VERIFY http.p12 WITH keytool
+sudo keytool -list -v -storetype PKCS12 -keystore /etc/elasticsearch/certs/http.p12
+
+VERIFY elastic-stack-ca.p12 WITH keytool
+sudo keytool -list -v -storetype PKCS12 -keystore /etc/elasticsearch/certs/elastic-stack-ca.p12
+
+SHOW xpack.security SETTINGS IN elasticsearch.yml
+sudo grep -n "^xpack.security" /etc/elasticsearch/elasticsearch.yml
+
+SHOW elasticsearch KEYSTORE ENTRIES
+sudo /usr/share/elasticsearch/bin/elasticsearch-keystore list
