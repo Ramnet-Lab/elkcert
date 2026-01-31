@@ -247,9 +247,7 @@ def generate_certs(config: RunConfig) -> Path:
             + " --pass \"$CERT_PASS\"",
             f"run_sudo chown {shlex.quote(config.ssh_user)}:{shlex.quote(config.ssh_user)} {remote_zip}",
             f"run_sudo rm -f \"$CA_P12\"",
-            "run_sudo "
-            + shlex.quote(config.certutil_bin)
-            + " ca --silent --out \"$CA_P12\" --pass \"$CERT_PASS\"",
+            "run_sudo keytool -importcert -alias ca -file \"$CA_CERT\" -keystore \"$CA_P12\" -storetype PKCS12 -storepass \"$CERT_PASS\" -noprompt",
             f"run_sudo chown {shlex.quote(config.ssh_user)}:{shlex.quote(config.ssh_user)} \"$CA_P12\"",
             "run_sudo test -s \"$CA_P12\"",
             "run_sudo rm -rf \"$ZIP_STAGE_DIR\"",
