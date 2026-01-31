@@ -23,6 +23,59 @@ def build_restart_script(*, sudo_pass: str, service_name: str) -> str:
     )
 
 
+def _log_command_output(label: str, stdout: str, stderr: str) -> None:
+    stdout_text = stdout.strip() or "<empty>"
+    stderr_text = stderr.strip() or "<empty>"
+    warn(f"{label} STDOUT:\n{stdout_text}")
+    warn(f"{label} STDERR:\n{stderr_text}")
+
+
+def _collect_failure_logs(
+    *,
+    connect_host: str,
+    service_name: str,
+    config: RunConfig,
+) -> None:
+    status_script = "\n".join(
+        [
+            "set -euo pipefail",
+            f"systemctl status {shlex.quote(service_name)} --no-pager -l",
+        ]
+    )
+    journal_script = "\n".join(
+        [
+            "set -euo pipefail",
+            f"journalctl -xeu {shlex.quote(service_name)} --no-pager -n 200",
+        ]
+    )
+
+    status_result = run_script(
+        connect_host,
+        status_script,
+        ssh_user=config.ssh_user,
+        ssh_port=config.ssh_port,
+        debug_ssh=config.debug_ssh,
+    )
+    _log_command_output(
+        f"systemctl status {service_name} on {connect_host}",
+        status_result.stdout,
+        status_result.stderr,
+    )
+
+    journal_result = run_script(
+        connect_host,
+        journal_script,
+        ssh_user=config.ssh_user,
+        ssh_port=config.ssh_port,
+        debug_ssh=config.debug_ssh,
+    )
+    _log_command_output(
+        f"journalctl -xeu {service_name} on {connect_host}",
+        journal_result.stdout,
+        journal_result.stderr,
+    )
+
+
 def restart_services(config: RunConfig) -> None:
     info("Restarting services after cert distribution")
     nodes_by_short = {node.short: node for node in config.nodes}
@@ -65,6 +118,12 @@ def restart_services(config: RunConfig) -> None:
             if result.stderr.strip():
                 warn(f"Details: {result.stderr.strip()}")
             continue
+
+        _collect_failure_logs(
+            connect_host=connect_host,
+            service_name=service_name,
+            config=config,
+        )
 
         if config.debug_ssh:
             if result.stdout.strip():
