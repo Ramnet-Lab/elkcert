@@ -23,6 +23,21 @@ def build_restart_script(*, sudo_pass: str, service_name: str) -> str:
     )
 
 
+def build_elasticsearch_keystore_script(*, sudo_pass: str) -> str:
+    return "\n".join(
+        [
+            "set -euo pipefail",
+            f"SUDO_PASS={shlex.quote(sudo_pass)}",
+            "KEYSTORE_PASS=\"$SUDO_PASS\"",
+            'run_sudo_keystore() { printf "%s\\n%s\\n" "$SUDO_PASS" "$KEYSTORE_PASS" | sudo -S -p "" "$@"; }',
+            'add_secret() { run_sudo_keystore /usr/share/elasticsearch/bin/elasticsearch-keystore add -xf "$1"; }',
+            "add_secret xpack.security.http.ssl.keystore.secure_password",
+            "add_secret xpack.security.transport.ssl.keystore.secure_password",
+            "add_secret xpack.security.transport.ssl.truststore.secure_password",
+        ]
+    )
+
+
 def _log_command_output(label: str, stdout: str, stderr: str) -> None:
     stdout_text = stdout.strip() or "<empty>"
     stderr_text = stderr.strip() or "<empty>"
@@ -89,6 +104,35 @@ def restart_services(config: RunConfig) -> None:
             raise RuntimeError(f"Missing service mapping for restart target: {short}")
 
         connect_host = _connect_host(node, config.connect_via)
+
+        if short.startswith("es"):
+            info(f"Setting Elasticsearch keystore passwords on {node.short}")
+            keystore_script = build_elasticsearch_keystore_script(
+                sudo_pass=config.sudo_pass,
+            )
+            keystore_result = run_script(
+                connect_host,
+                keystore_script,
+                ssh_user=config.ssh_user,
+                ssh_port=config.ssh_port,
+                debug_ssh=config.debug_ssh,
+            )
+            if keystore_result.returncode != 0:
+                _log_command_output(
+                    f"elasticsearch-keystore setup on {node.short}",
+                    keystore_result.stdout,
+                    keystore_result.stderr,
+                )
+                raise RuntimeError(
+                    f"Elasticsearch keystore setup failed on {node.short} "
+                    f"with exit code {keystore_result.returncode}"
+                    + (
+                        f"\n{keystore_result.stderr.strip()}"
+                        if keystore_result.stderr.strip()
+                        else ""
+                    )
+                )
+
         info(f"Restarting {service_name} on {node.short}")
         restart_script = build_restart_script(
             sudo_pass=config.sudo_pass,
