@@ -269,6 +269,19 @@ def distribute_es_http_ca(*, config: RunConfig, ca_path: Path) -> None:
         else:
             dest_selector = f"CA_DEST={shlex.quote(dest)}"
 
+        if node.short == "fleet":
+            chown_line = "\n".join(
+                [
+                    f"if getent group {shlex.quote(group)} >/dev/null 2>&1; then",
+                    f"  run_sudo chown root:{shlex.quote(group)} \"$CA_DEST\" || run_sudo chown root:root \"$CA_DEST\"",
+                    "else",
+                    "  run_sudo chown root:root \"$CA_DEST\"",
+                    "fi",
+                ]
+            )
+        else:
+            chown_line = f"run_sudo chown root:{shlex.quote(group)} \"$CA_DEST\""
+
         install_script = "\n".join(
             [
                 "set -euo pipefail",
@@ -278,7 +291,7 @@ def distribute_es_http_ca(*, config: RunConfig, ca_path: Path) -> None:
                 dest_selector,
                 "run_sudo mkdir -p \"$(dirname \"$CA_DEST\")\"",
                 "run_sudo cp -af \"$STAGE_FILE\" \"$CA_DEST\"",
-                f"run_sudo chown root:{shlex.quote(group)} \"$CA_DEST\"",
+                chown_line,
                 "run_sudo chmod 640 \"$CA_DEST\"",
             ]
         )
