@@ -230,6 +230,8 @@ def generate_certs(config: RunConfig) -> Path:
             f"CA_CERT={shlex.quote(config.ca_cert)}",
             f"CA_KEY={shlex.quote(config.ca_key)}",
             f"CA_P12={shlex.quote(f'{config.cert_workdir}/elastic-stack-ca.p12')}",
+            f"ZIP_STAGE_DIR={shlex.quote(f'{config.cert_workdir}/certs-stage')}",
+            f"ZIP_STAGE={shlex.quote(f'{config.cert_workdir}/certs-stage/certs.zip')}",
             'run_sudo() { echo "$SUDO_PASS" | sudo -S -p "" "$@"; }',
             f"run_sudo rm -f {remote_zip}",
             "run_sudo "
@@ -243,11 +245,16 @@ def generate_certs(config: RunConfig) -> Path:
             + " --ca-key "
             + config.ca_key
             + " --pass \"$CERT_PASS\"",
+            f"run_sudo chown {shlex.quote(config.ssh_user)}:{shlex.quote(config.ssh_user)} {remote_zip}",
             f"run_sudo rm -f \"$CA_P12\"",
             "run_sudo openssl pkcs12 -export -in \"$CA_CERT\" -inkey \"$CA_KEY\" -out \"$CA_P12\" -passout \"pass:$CERT_PASS\"",
             f"run_sudo chown {shlex.quote(config.ssh_user)}:{shlex.quote(config.ssh_user)} \"$CA_P12\"",
             "run_sudo test -s \"$CA_P12\"",
-            "env ZIP_PATH=\"" + remote_zip + "\" CA_P12=\"$CA_P12\" python3 - <<'PY'",
+            "run_sudo rm -rf \"$ZIP_STAGE_DIR\"",
+            "run_sudo mkdir -p \"$ZIP_STAGE_DIR\"",
+            f"run_sudo chown {shlex.quote(config.ssh_user)}:{shlex.quote(config.ssh_user)} \"$ZIP_STAGE_DIR\"",
+            "cp \"" + remote_zip + "\" \"$ZIP_STAGE\"",
+            "env ZIP_PATH=\"$ZIP_STAGE\" CA_P12=\"$CA_P12\" python3 - <<'PY'",
             "import os",
             "import zipfile",
             "zip_path = os.environ['ZIP_PATH']",
@@ -255,6 +262,7 @@ def generate_certs(config: RunConfig) -> Path:
             "with zipfile.ZipFile(zip_path, 'a') as zf:",
             "    zf.write(p12_path, arcname='elastic-stack-ca.p12')",
             "PY",
+            "run_sudo mv \"$ZIP_STAGE\" \"" + remote_zip + "\"",
             f"run_sudo chown {shlex.quote(config.ssh_user)}:{shlex.quote(config.ssh_user)} {remote_zip}",
         ]
     )
