@@ -23,6 +23,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CERTS_OUT = SCRIPT_DIR / "elk-certs.zip"
 
 CERT_WORKDIR = "/tmp/elkcerts"
+ES_HTTP_CA_CERT = f"{CERT_WORKDIR}/elasticsearch-http-ca.crt"
+FLEET_HTTP_CA_DEST = "/etc/elastic/certs/elasticsearch-http-ca.crt"
 CERT_DESTINATIONS = {
     "es1": "/etc/elasticsearch/certs",
     "es2": "/etc/elasticsearch/certs",
@@ -92,6 +94,8 @@ def load_config() -> RunConfig:
         ca_dir=CA_DIR,
         ca_cert=CA_CERT,
         ca_key=CA_KEY,
+        es_http_ca_cert=ES_HTTP_CA_CERT,
+        fleet_http_ca_dest=FLEET_HTTP_CA_DEST,
         purge_ca=True,
         purge_node_certs=True,
         debug_ssh=DEFAULT_DEBUG_SSH,

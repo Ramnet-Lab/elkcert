@@ -48,6 +48,8 @@ class RunConfig:
     ca_dir: str
     ca_cert: str
     ca_key: str
+    es_http_ca_cert: str
+    fleet_http_ca_dest: str
     purge_ca: bool
     purge_node_certs: bool
     debug_ssh: bool

@@ -10,7 +10,7 @@ from typing import Sequence
 from config import CA_DESTINATIONS
 from log import info
 from models import Node, RunConfig, Target
-from ssh import run_script, upload
+from ssh import download, run_script, upload
 
 
 def _connect_host(node: Node, connect_via: str) -> str:
@@ -36,6 +36,13 @@ def _raise_on_failure(host: str, action: str, returncode: int, stdout: str, stde
         f"Remote command failed during {action} on {host} with exit code {returncode}"
         + (f"\n{detail_text}" if detail_text else "")
     )
+
+
+def _require_node(config: RunConfig, short: str) -> Node:
+    node = next((item for item in config.nodes if item.short == short), None)
+    if node is None:
+        raise RuntimeError(f"Unable to resolve {short} node definition")
+    return node
 
 
 def build_distribution_targets(config: RunConfig) -> list[Target]:
@@ -172,6 +179,137 @@ def distribute_certs(*, config: RunConfig, archive_path: Path) -> None:
             _raise_on_failure(
                 connect_host,
                 "install certs",
+                result.returncode,
+                result.stdout,
+                result.stderr,
+                debug_ssh=config.debug_ssh,
+            )
+        
+        
+        def distribute_fleet_http_ca(*, config: RunConfig, remote_ca_path: str) -> None:
+            info("Distributing ES HTTP CA to Fleet")
+        
+            try:
+                es1_node = _require_node(config, "es1")
+                fleet_node = _require_node(config, "fleet")
+            except RuntimeError:
+                info("Fleet node not defined; skipping Fleet CA distribution")
+                return
+        
+            es1_host = _connect_host(es1_node, config.connect_via)
+            fleet_host = _connect_host(fleet_node, config.connect_via)
+        
+            temp_dir = Path(tempfile.mkdtemp(prefix="elkcerts-fleet-ca-"))
+            local_ca = temp_dir / "elasticsearch-http-ca.crt"
+        
+            download_result = download(
+                remote_ca_path,
+                str(local_ca),
+                ssh_user=config.ssh_user,
+                host=es1_host,
+                ssh_port=config.ssh_port,
+                debug_ssh=config.debug_ssh,
+            )
+            _raise_on_failure(
+                es1_host,
+                "Fleet CA download",
+                download_result.returncode,
+                download_result.stdout,
+                download_result.stderr,
+                debug_ssh=config.debug_ssh,
+            )
+        
+            stage_parent = f"{config.cert_workdir}/stage-fleet-ca"
+            stage_dir = f"{stage_parent}/fleet"
+            stage_file = f"{stage_dir}/elasticsearch-http-ca.crt"
+        
+            prep_script = "\n".join(
+                [
+                    "set -euo pipefail",
+                    f"SUDO_PASS={shlex.quote(config.sudo_pass)}",
+                    'run_sudo() { echo "$SUDO_PASS" | sudo -S -p "" "$@"; }',
+                    f"run_sudo mkdir -p {shlex.quote(stage_parent)}",
+                    f"run_sudo rm -rf {shlex.quote(stage_dir)}",
+                    f"run_sudo mkdir -p {shlex.quote(stage_dir)}",
+                    f"run_sudo chown {shlex.quote(config.ssh_user)}:{shlex.quote(config.ssh_user)} {shlex.quote(stage_parent)}",
+                    f"run_sudo chown {shlex.quote(config.ssh_user)}:{shlex.quote(config.ssh_user)} {shlex.quote(stage_dir)}",
+                ]
+            )
+        
+            result = run_script(
+                fleet_host,
+                prep_script,
+                ssh_user=config.ssh_user,
+                ssh_port=config.ssh_port,
+                debug_ssh=config.debug_ssh,
+            )
+            _raise_on_failure(
+                fleet_host,
+                "Fleet CA stage prep",
+                result.returncode,
+                result.stdout,
+                result.stderr,
+                debug_ssh=config.debug_ssh,
+            )
+        
+            upload_result = upload(
+                str(local_ca),
+                stage_file,
+                ssh_user=config.ssh_user,
+                host=fleet_host,
+                ssh_port=config.ssh_port,
+                recursive=False,
+                debug_ssh=config.debug_ssh,
+            )
+            _raise_on_failure(
+                fleet_host,
+                "Fleet CA stage upload",
+                upload_result.returncode,
+                upload_result.stdout,
+                upload_result.stderr,
+                debug_ssh=config.debug_ssh,
+            )
+        
+            group = config.service_name_by_node.get("fleet", "fleet")
+            fleet_alt_dir = "/etc/elastic-agent/certs"
+            fleet_alt_dest = f"{fleet_alt_dir}/elasticsearch-http-ca.crt"
+            fleet_primary = config.fleet_http_ca_dest
+        
+            install_script = "\n".join(
+                [
+                    "set -euo pipefail",
+                    f"SUDO_PASS={shlex.quote(config.sudo_pass)}",
+                    'run_sudo() { echo "$SUDO_PASS" | sudo -S -p "" "$@"; }',
+                    f"STAGE_FILE={shlex.quote(stage_file)}",
+                    f"FLEET_PRIMARY={shlex.quote(fleet_primary)}",
+                    f"FLEET_ALT_DIR={shlex.quote(fleet_alt_dir)}",
+                    f"FLEET_ALT_DEST={shlex.quote(fleet_alt_dest)}",
+                    "if [ -d \"$FLEET_ALT_DIR\" ]; then",
+                    "  CA_DEST=\"$FLEET_ALT_DEST\"",
+                    "else",
+                    "  CA_DEST=\"$FLEET_PRIMARY\"",
+                    "fi",
+                    "run_sudo mkdir -p \"$(dirname \"$CA_DEST\")\"",
+                    "run_sudo cp -af \"$STAGE_FILE\" \"$CA_DEST\"",
+                    f"if getent group {shlex.quote(group)} >/dev/null 2>&1; then",
+                    f"  run_sudo chown root:{shlex.quote(group)} \"$CA_DEST\" || run_sudo chown root:root \"$CA_DEST\"",
+                    "else",
+                    "  run_sudo chown root:root \"$CA_DEST\"",
+                    "fi",
+                    "run_sudo chmod 644 \"$CA_DEST\"",
+                ]
+            )
+        
+            result = run_script(
+                fleet_host,
+                install_script,
+                ssh_user=config.ssh_user,
+                ssh_port=config.ssh_port,
+                debug_ssh=config.debug_ssh,
+            )
+            _raise_on_failure(
+                fleet_host,
+                "Fleet CA install",
                 result.returncode,
                 result.stdout,
                 result.stderr,

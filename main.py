@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from certs import extract_es_http_ca, generate_certs
+from certs import extract_es_http_ca, extract_es_http_ca_from_p12, generate_certs
 from config import load_config
-from distribute import distribute_certs, distribute_es_http_ca
+from distribute import distribute_certs, distribute_es_http_ca, distribute_fleet_http_ca
 from dns import apply_hosts
 from log import info
 from restart import restart_services
@@ -27,6 +27,9 @@ def run() -> int:
         raise RuntimeError("Cert generation did not return an archive path")
 
     distribute_certs(config=config, archive_path=archive_path)
+
+    remote_ca_path = extract_es_http_ca_from_p12(config)
+    distribute_fleet_http_ca(config=config, remote_ca_path=remote_ca_path)
 
     ca_path = extract_es_http_ca(config)
     distribute_es_http_ca(config=config, ca_path=ca_path)
