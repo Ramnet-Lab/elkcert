@@ -38,6 +38,13 @@ def _connect_host(node: Node, connect_via: str) -> str:
     return node.ip if connect_via == "ip" else node.fqdn
 
 
+def _require_node(config: RunConfig, short: str) -> Node:
+    node = next((item for item in config.nodes if item.short == short), None)
+    if node is None:
+        raise RuntimeError(f"Unable to resolve {short} node definition")
+    return node
+
+
 def _raise_on_failure(host: str, action: str, returncode: int, stdout: str, stderr: str, *, debug_ssh: bool) -> None:
     if returncode == 0:
         return
@@ -148,6 +155,92 @@ def purge_and_bootstrap_ca(config: RunConfig, es1_host: str) -> None:
     )
 
 
+def extract_es_http_ca(config: RunConfig) -> Path:
+    kibana_node = _require_node(config, "kibana")
+    es1_node = _require_node(config, "es1")
+    kibana_host = _connect_host(kibana_node, config.connect_via)
+    es1_host = _connect_host(es1_node, config.connect_via)
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="elkcerts-es-http-ca-"))
+    local_ca_path = temp_dir / "es-http-ca.pem"
+
+    remote_dir = f"{config.cert_workdir}/es-http-ca"
+    remote_ca = f"{remote_dir}/es-http-ca.pem"
+    remote_chain = f"{remote_dir}/chain.pem"
+    remote_certs = f"{remote_dir}/certs"
+
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            f"SUDO_PASS={shlex.quote(config.sudo_pass)}",
+            'run_sudo() { echo "$SUDO_PASS" | sudo -S -p "" "$@"; }',
+            f"ES_HOST={shlex.quote(es1_host)}",
+            f"REMOTE_DIR={shlex.quote(remote_dir)}",
+            f"REMOTE_CHAIN={shlex.quote(remote_chain)}",
+            f"REMOTE_CERTS={shlex.quote(remote_certs)}",
+            f"REMOTE_CA={shlex.quote(remote_ca)}",
+            f"run_sudo rm -rf {shlex.quote(remote_dir)}",
+            f"run_sudo mkdir -p {shlex.quote(remote_dir)}",
+            f"run_sudo chown {shlex.quote(config.ssh_user)}:{shlex.quote(config.ssh_user)} {shlex.quote(remote_dir)}",
+            "mkdir -p \"$REMOTE_CERTS\"",
+            "openssl s_client -connect \"$ES_HOST:9200\" -showcerts < /dev/null 2>/dev/null |",
+            "  awk '/BEGIN CERTIFICATE/,/END CERTIFICATE/{print}' > \"$REMOTE_CHAIN\"",
+            "rm -f \"$REMOTE_CERTS\"/*.pem",
+            "awk -v dir=\"$REMOTE_CERTS\" 'BEGIN{c=0}/BEGIN CERTIFICATE/{c++} {print > (dir \"/cert-\" c \".pem\")} ' \"$REMOTE_CHAIN\"",
+            "FOUND=0",
+            "for f in \"$REMOTE_CERTS\"/*.pem; do",
+            "  if openssl x509 -in \"$f\" -text -noout | grep -q \"CA:TRUE\"; then",
+            "    cp -f \"$f\" \"$REMOTE_CA\"",
+            "    FOUND=1",
+            "    break",
+            "  fi",
+            "done",
+            "if [ \"$FOUND\" -ne 1 ]; then",
+            "  echo \"Unable to locate CA:TRUE certificate in chain\" >&2",
+            "  exit 1",
+            "fi",
+            "test -s \"$REMOTE_CA\"",
+        ]
+    )
+
+    info("Extracting ES HTTP CA from live TLS chain on Kibana")
+    result = run_script(
+        kibana_host,
+        script,
+        ssh_user=config.ssh_user,
+        ssh_port=config.ssh_port,
+        debug_ssh=config.debug_ssh,
+    )
+    _raise_on_failure(
+        kibana_host,
+        "ES HTTP CA extraction",
+        result.returncode,
+        result.stdout,
+        result.stderr,
+        debug_ssh=config.debug_ssh,
+    )
+
+    download_result = download(
+        remote_ca,
+        str(local_ca_path),
+        ssh_user=config.ssh_user,
+        host=kibana_host,
+        ssh_port=config.ssh_port,
+        debug_ssh=config.debug_ssh,
+    )
+    _raise_on_failure(
+        kibana_host,
+        "ES HTTP CA download",
+        download_result.returncode,
+        download_result.stdout,
+        download_result.stderr,
+        debug_ssh=config.debug_ssh,
+    )
+
+    info(f"ES HTTP CA stored at: {local_ca_path}")
+    return local_ca_path
+
+
 def generate_certs(config: RunConfig) -> Path:
     cert_nodes = select_cert_nodes(config.nodes)
 
@@ -157,9 +250,7 @@ def generate_certs(config: RunConfig) -> Path:
         )
         verify_dns(required_dns)
 
-    es1_node = next((node for node in config.nodes if node.short == "es1"), None)
-    if es1_node is None:
-        raise RuntimeError("Unable to resolve es1 node definition")
+    es1_node = _require_node(config, "es1")
     es1_host = _connect_host(es1_node, config.connect_via)
 
     output_path = config.certs_out

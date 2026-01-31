@@ -31,6 +31,12 @@ CERT_DESTINATIONS = {
     "fleet": "/etc/elastic-agent/certs",
     "logstash": "/etc/logstash/certs",
 }
+CA_DESTINATIONS = {
+    "kibana": "/etc/kibana/elasticsearch-ca.pem",
+    "fleet": "/etc/elastic-agent/ca.pem",
+    "fleet_alt": "/etc/elastic-agent/certs/ca.pem",
+    "logstash": "/etc/logstash/certs/ca.pem",
+}
 SERVICE_NAME_BY_NODE = {
     "es1": "elasticsearch",
     "es2": "elasticsearch",

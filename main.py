@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from certs import generate_certs
+from certs import extract_es_http_ca, generate_certs
 from config import load_config
-from distribute import distribute_certs
+from distribute import distribute_certs, distribute_es_http_ca
 from dns import apply_hosts
 from log import info
 from restart import restart_services
@@ -27,6 +27,10 @@ def run() -> int:
         raise RuntimeError("Cert generation did not return an archive path")
 
     distribute_certs(config=config, archive_path=archive_path)
+
+    ca_path = extract_es_http_ca(config)
+    distribute_es_http_ca(config=config, ca_path=ca_path)
+
     restart_services(config)
 
     info("Completed full ELK cert rebuild flow")

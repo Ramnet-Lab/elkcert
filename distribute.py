@@ -7,6 +7,7 @@ import zipfile
 from pathlib import Path
 from typing import Sequence
 
+from config import CA_DESTINATIONS
 from log import info
 from models import Node, RunConfig, Target
 from ssh import run_script, upload
@@ -44,6 +45,12 @@ def build_distribution_targets(config: RunConfig) -> list[Target]:
         if dest:
             targets.append(Target(node=node, dest=dest))
     return targets
+
+
+def _ca_destination_for_node(node: Node) -> str | None:
+    if node.short == "fleet":
+        return CA_DESTINATIONS.get("fleet") or CA_DESTINATIONS.get("fleet_alt")
+    return CA_DESTINATIONS.get(node.short)
 
 
 def distribute_certs(*, config: RunConfig, archive_path: Path) -> None:
@@ -170,3 +177,124 @@ def distribute_certs(*, config: RunConfig, archive_path: Path) -> None:
                 result.stderr,
                 debug_ssh=config.debug_ssh,
             )
+
+
+def distribute_es_http_ca(*, config: RunConfig, ca_path: Path) -> None:
+    info("Distributing ES HTTP CA to non-ES nodes")
+
+    targets: list[Target] = []
+    for node in config.nodes:
+        if node.short in {"kibana", "fleet", "logstash"}:
+            dest = _ca_destination_for_node(node)
+            if dest:
+                targets.append(Target(node=node, dest=dest))
+
+    if not targets:
+        info("No ES HTTP CA distribution targets found")
+        return
+
+    stage_parent = f"{config.cert_workdir}/stage-ca"
+
+    for target in targets:
+        node = target.node
+        dest = target.dest
+        connect_host = _connect_host(node, config.connect_via)
+        stage_dir = f"{stage_parent}/{node.short}"
+        stage_file = f"{stage_dir}/es-http-ca.pem"
+
+        prep_script = "\n".join(
+            [
+                "set -euo pipefail",
+                f"SUDO_PASS={shlex.quote(config.sudo_pass)}",
+                'run_sudo() { echo "$SUDO_PASS" | sudo -S -p "" "$@"; }',
+                f"run_sudo mkdir -p {shlex.quote(stage_parent)}",
+                f"run_sudo rm -rf {shlex.quote(stage_dir)}",
+                f"run_sudo mkdir -p {shlex.quote(stage_dir)}",
+                f"run_sudo chown {shlex.quote(config.ssh_user)}:{shlex.quote(config.ssh_user)} {shlex.quote(stage_parent)}",
+                f"run_sudo chown {shlex.quote(config.ssh_user)}:{shlex.quote(config.ssh_user)} {shlex.quote(stage_dir)}",
+            ]
+        )
+
+        result = run_script(
+            connect_host,
+            prep_script,
+            ssh_user=config.ssh_user,
+            ssh_port=config.ssh_port,
+            debug_ssh=config.debug_ssh,
+        )
+        _raise_on_failure(
+            connect_host,
+            "CA stage prep",
+            result.returncode,
+            result.stdout,
+            result.stderr,
+            debug_ssh=config.debug_ssh,
+        )
+
+        upload_result = upload(
+            str(ca_path),
+            stage_file,
+            ssh_user=config.ssh_user,
+            host=connect_host,
+            ssh_port=config.ssh_port,
+            recursive=False,
+            debug_ssh=config.debug_ssh,
+        )
+        _raise_on_failure(
+            connect_host,
+            "CA stage upload",
+            upload_result.returncode,
+            upload_result.stdout,
+            upload_result.stderr,
+            debug_ssh=config.debug_ssh,
+        )
+
+        group = config.service_name_by_node.get(node.short, node.short)
+        dest_parent = str(Path(dest).parent)
+
+        if node.short == "fleet":
+            fleet_primary = CA_DESTINATIONS.get("fleet", dest)
+            fleet_alt = CA_DESTINATIONS.get("fleet_alt", dest)
+            dest_selector = "\n".join(
+                [
+                    f"FLEET_PRIMARY={shlex.quote(fleet_primary)}",
+                    f"FLEET_ALT={shlex.quote(fleet_alt)}",
+                    "if [ -d \"$(dirname \"$FLEET_ALT\")\" ]; then",
+                    "  CA_DEST=\"$FLEET_ALT\"",
+                    "else",
+                    "  CA_DEST=\"$FLEET_PRIMARY\"",
+                    "fi",
+                ]
+            )
+        else:
+            dest_selector = f"CA_DEST={shlex.quote(dest)}"
+
+        install_script = "\n".join(
+            [
+                "set -euo pipefail",
+                f"SUDO_PASS={shlex.quote(config.sudo_pass)}",
+                'run_sudo() { echo "$SUDO_PASS" | sudo -S -p "" "$@"; }',
+                f"STAGE_FILE={shlex.quote(stage_file)}",
+                dest_selector,
+                "run_sudo mkdir -p \"$(dirname \"$CA_DEST\")\"",
+                "run_sudo cp -af \"$STAGE_FILE\" \"$CA_DEST\"",
+                f"run_sudo chown root:{shlex.quote(group)} \"$CA_DEST\"",
+                "run_sudo chmod 640 \"$CA_DEST\"",
+            ]
+        )
+
+        result = run_script(
+            connect_host,
+            install_script,
+            ssh_user=config.ssh_user,
+            ssh_port=config.ssh_port,
+            debug_ssh=config.debug_ssh,
+        )
+        _raise_on_failure(
+            connect_host,
+            "CA install",
+            result.returncode,
+            result.stdout,
+            result.stderr,
+            debug_ssh=config.debug_ssh,
+        )
