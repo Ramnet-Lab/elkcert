@@ -52,6 +52,8 @@ def distribute_certs(*, config: RunConfig, archive_path: Path) -> None:
     if not targets:
         raise RuntimeError("No distribution targets found")
 
+    es_nodes = {"es1", "es2", "es3"}
+
     with tempfile.TemporaryDirectory(prefix="elkcerts-unzip-") as tmp:
         tmp_path = Path(tmp)
         with zipfile.ZipFile(archive_path, "r") as zip_ref:
@@ -66,6 +68,8 @@ def distribute_certs(*, config: RunConfig, archive_path: Path) -> None:
 
             stage_parent = f"{config.cert_workdir}/stage"
             stage_dir = f"{stage_parent}/{node.short}"
+            stage_parent_quoted = shlex.quote(stage_parent)
+            stage_dir_quoted = shlex.quote(stage_dir)
             connect_host = _connect_host(node, config.connect_via)
 
             prep_script = "\n".join(
@@ -73,9 +77,9 @@ def distribute_certs(*, config: RunConfig, archive_path: Path) -> None:
                     "set -euo pipefail",
                     f"SUDO_PASS={shlex.quote(config.sudo_pass)}",
                     'run_sudo() { echo "$SUDO_PASS" | sudo -S -p "" "$@"; }',
-                    f"run_sudo mkdir -p {stage_parent}",
-                    f"run_sudo rm -rf {stage_dir}",
-                    f"run_sudo chown {shlex.quote(config.ssh_user)}:{shlex.quote(config.ssh_user)} {stage_parent}",
+                    f"run_sudo mkdir -p {stage_parent_quoted}",
+                    f"run_sudo rm -rf {stage_dir_quoted}",
+                    f"run_sudo chown {shlex.quote(config.ssh_user)}:{shlex.quote(config.ssh_user)} {stage_parent_quoted}",
                 ]
             )
 
@@ -113,17 +117,27 @@ def distribute_certs(*, config: RunConfig, archive_path: Path) -> None:
                 debug_ssh=config.debug_ssh,
             )
 
-            purge_line = f"run_sudo rm -rf {dest}" if config.purge_node_certs else ""
-            install_script = "\n".join(
-                [
-                    "set -euo pipefail",
-                    f"SUDO_PASS={shlex.quote(config.sudo_pass)}",
-                    'run_sudo() { echo "$SUDO_PASS" | sudo -S -p "" "$@"; }',
-                    purge_line,
-                    f"run_sudo mkdir -p {dest}",
-                    f"run_sudo cp -af {stage_dir}/. {dest}/",
-                ]
-            )
+            dest_quoted = shlex.quote(dest)
+            purge_line = f"run_sudo rm -rf {dest_quoted}" if config.purge_node_certs else ""
+            install_lines = [
+                "set -euo pipefail",
+                f"SUDO_PASS={shlex.quote(config.sudo_pass)}",
+                'run_sudo() { echo "$SUDO_PASS" | sudo -S -p "" "$@"; }',
+                purge_line,
+                f"run_sudo mkdir -p {dest_quoted}",
+                f"run_sudo cp -af {stage_dir_quoted}/. {dest_quoted}/",
+            ]
+            if node.short in es_nodes:
+                p12_source = f"{stage_dir}/{node.short}.p12"
+                http_p12_dest = f"{dest}/http.p12"
+                install_lines.extend(
+                    [
+                        f"if run_sudo test -f {shlex.quote(p12_source)}; then",
+                        f"  run_sudo cp -af {shlex.quote(p12_source)} {shlex.quote(http_p12_dest)}",
+                        "fi",
+                    ]
+                )
+            install_script = "\n".join(install_lines)
 
             result = run_script(
                 connect_host,
