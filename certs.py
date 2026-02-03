@@ -14,7 +14,7 @@ from ssh import download, run_script, upload
 
 
 def select_cert_nodes(nodes: Sequence[Node]) -> list[Node]:
-    wanted = {"es1", "es2", "es3", "kibana", "fleet", "logstash"}
+    wanted = {"es1", "es2", "es3", "kibana", "fleet", "logstash", "ml1", "ml2"}
     return [node for node in nodes if node.short in wanted]
 
 
@@ -26,6 +26,9 @@ def build_instances_yaml(nodes: Sequence[Node]) -> str:
         lines.append(f"      - {node.fqdn}")
         if node.short != node.fqdn:
             lines.append(f"      - {node.short}")
+        if node.short in {"ml1", "ml2"}:
+            lines.append("    ip:")
+            lines.append(f"      - {node.ip}")
     return "\n".join(lines) + "\n"
 
 
@@ -148,6 +151,36 @@ def purge_and_bootstrap_ca(config: RunConfig, es1_host: str) -> None:
     _raise_on_failure(
         es1_host,
         "CA bootstrap",
+        result.returncode,
+        result.stdout,
+        result.stderr,
+        debug_ssh=config.debug_ssh,
+    )
+
+
+def ensure_ca_present(config: RunConfig, es1_host: str) -> None:
+    info("Reusing existing PEM CA on es1")
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            f"SUDO_PASS={shlex.quote(config.sudo_pass)}",
+            'run_sudo() { echo "$SUDO_PASS" | sudo -S -p "" "$@"; }',
+            f"CA_CERT={shlex.quote(config.ca_cert)}",
+            f"CA_KEY={shlex.quote(config.ca_key)}",
+            "run_sudo test -s \"$CA_CERT\"",
+            "run_sudo test -s \"$CA_KEY\"",
+        ]
+    )
+    result = run_script(
+        es1_host,
+        script,
+        ssh_user=config.ssh_user,
+        ssh_port=config.ssh_port,
+        debug_ssh=config.debug_ssh,
+    )
+    _raise_on_failure(
+        es1_host,
+        "CA presence check",
         result.returncode,
         result.stdout,
         result.stderr,
@@ -282,8 +315,16 @@ def extract_es_http_ca(config: RunConfig) -> Path:
     return local_ca_path
 
 
-def generate_certs(config: RunConfig) -> Path:
-    cert_nodes = select_cert_nodes(config.nodes)
+def generate_certs(
+    config: RunConfig,
+    *,
+    nodes_override: Sequence[Node] | None = None,
+    reuse_ca: bool = False,
+    target_shorts: set[str] | None = None,
+) -> Path:
+    cert_nodes = list(nodes_override) if nodes_override is not None else select_cert_nodes(config.nodes)
+    if target_shorts is not None:
+        cert_nodes = [node for node in cert_nodes if node.short in target_shorts]
 
     if config.connect_via == "fqdn":
         required_dns = sorted(
@@ -332,7 +373,10 @@ def generate_certs(config: RunConfig) -> Path:
         debug_ssh=config.debug_ssh,
     )
 
-    purge_and_bootstrap_ca(config, es1_host)
+    if reuse_ca:
+        ensure_ca_present(config, es1_host)
+    else:
+        purge_and_bootstrap_ca(config, es1_host)
 
     info(f"Uploading instances.yml to {es1_host}")
     upload_result = upload(
